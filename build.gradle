@@ -1,1 +1,137 @@
-apply plugin : 'java'
+['java', 'signing', 'maven-publish'].each {
+    apply plugin: it
+}
+
+// project information
+group = 'me.franfernandez'
+version = '0.1-SNAPSHOT'
+
+
+repositories {
+    mavenCentral()
+}
+
+
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    classifier = 'javadoc'
+    from javadoc.destinationDir
+}
+task sourceJar(type: Jar) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+
+ext {
+    pomFilePath = "${project.projectDir}/tmp/pom.xml"
+    pomFile = file(pomFilePath)
+}
+
+
+configurations {
+    pom
+}
+
+artifacts {
+    archives jar
+    archives sourceJar
+    archives javadocJar
+    if (pomFile.exists()) {
+        pom pomFile
+    }
+}
+
+
+task signJars(type: Sign, dependsOn: [jar, javadocJar, sourceJar]) {
+    sign configurations.archives
+}
+
+task signPom(type: Sign) {
+    sign configurations.pom
+}
+
+
+if (project.ext.pomFile.exists()) {
+    task preparePublication(dependsOn: [signJars, signPom])
+} else {
+    task preparePublication(dependsOn: signJars)
+}
+
+
+def getSignatureFiles = {
+    def allFiles = project.tasks.signJars.signatureFiles.collect { it }
+    def signedSources = allFiles.find { it.name.contains('-sources') }
+    def signedJavadoc = allFiles.find { it.name.contains('-javadoc') }
+    def signedJar = (allFiles - [signedSources, signedJavadoc])[0]
+    return [
+            [archive: signedSources, classifier: 'sources', extension: 'jar.asc'],
+            [archive: signedJavadoc, classifier: 'javadoc', extension: 'jar.asc'],
+            [archive: signedJar, classifier: null, extension: 'jar.asc']
+    ]
+}
+
+def getPomSignature = {
+    return project.tasks.signPom.signatureFiles.collect { it }[0]
+}
+
+
+publishing {
+    publications {
+        gpgJars(MavenPublication) {
+            getSignatureFiles().each { signature ->
+                artifact(signature.archive) {
+                    classifier = signature.classifier
+                    extension = signature.extension
+                }
+            }
+        }
+        if (project.ext.pomFile.exists()) {
+            gpgPom(MavenPublication) {
+                artifact(getPomSignature()) {
+                    classifier = null
+                    extension = 'pom.asc'
+                }
+            }
+        }
+        jar(MavenPublication) {
+            from components.java
+            pom.withXml {
+                asNode().children().last() + {
+                    resolveStrategy = Closure.DELEGATE_FIRST
+                    name 'fftpack'
+                    description 'fftpack is a Java version of fftpack. fftpack is based on Paul N. Swarztraubre Fortran code and Pekka Janhuen C code.'
+                    url 'http://github.com/fjfdeztoro/fftpack'
+                    scm {
+                        url 'http://github.com/fjfdeztoro/fftpack'
+                        connection 'scm:git:git://github.com/fjfdeztoro/fftpack.git'
+                        developerConnection 'scm:git:git://github.com:fjfdeztoro/fftpack.git'
+                    }
+                    licenses {
+                        license {
+                            name 'The Apache Software License, Version 2.0'
+                            url 'http://www.apache.org/license/LICENSE-2.0.txt'
+                            distribution 'repo'
+                        }
+                    }
+                    developers {
+                        developer {
+                            id 'fjfdeztoro'
+                            name 'Francisco Javier Fernandez'
+                            email 'fjfdeztoro@gmail.com'
+                        }
+                    }
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            url 'https://oss.sonatype.org/content/repositories/snapshots'
+            credentials {
+                username = sonatypeUsername
+                password = sonatypePassword
+            }
+        }
+
+    }
+}
